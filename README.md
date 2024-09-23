@@ -9,10 +9,15 @@ At Bequest, we require that important user data is tamper proof. Otherwise, our 
 
 Edit this repo to answer these two questions using any technologies you'd like, there any many possible solutions. Feel free to add comments.
 
+### To run redis, before starting the apps
+```docker run --name redis-server -p 6379:6379 -v redis-data:/data -d redis```
+
 ### To run the apps:
 ```npm run start``` in both the frontend and backend
 
-## To make a submission:
-1. Clone the repo
-2. Make a PR with your changes in your repo
-3. Email your github repository to robert@bequest.finance
+### Steps to Tamper Data, can modify data/hmac or both
+**i. ```get "userData:<user-id>"```**
+
+**ii. ```get "backup-userData:<user-id>"```**
+
+**iii. ```set "userData:<user-id>" "{\"data\":\"hell\",\"hmac\":\"9e99f427cdbac60094c9baf7bd734273703a7bc521c2387bc4884938109e5a14\"}"```**
