@@ -12,7 +12,7 @@ function App() {
     alert(message); // Replace with a better toast in production
   };
 
-  const getTokenAndSecret = useCallback(async () => {
+  const getTokenAndSecret = useCallback(async (retries=3) => {
     try {
       const response = await fetch(`${API_URL}/connect`, {
         credentials: "include",
@@ -22,8 +22,12 @@ function App() {
       setSecret(data.data.secret);
       showToast("Connected successfully, secret retrieved.");
     } catch (error) {
-      showToast("Error connecting to API.");
-      console.error("Error connecting to API:", error);
+      if (retries > 0) {
+        setTimeout(() => getTokenAndSecret(retries - 1), 1000);
+      } else {
+        showToast("Error connecting to API after multiple attempts.");
+        console.error("Error connecting to API:", error);
+      }
     }
   }, []);
 
@@ -35,9 +39,9 @@ function App() {
     return CryptoJS.SHA256(secret).toString(CryptoJS.enc.Hex).slice(0, 64); // 32 bytes for AES-256
   };
 
-  const encryptData = (data: string) => {
+  const encryptData = async(data: string) => {
     if (!secret || !id) {
-      getTokenAndSecret();
+      await getTokenAndSecret();
       throw new Error("Missing secret or id. Reconnecting.");
     }
 
@@ -50,18 +54,18 @@ function App() {
     return encryptedData;
   };
 
-  const generateHMAC = (encryptedData: string) => {
+  const generateHMAC = async(encryptedData: string) => {
     if (!secret) {
-      getTokenAndSecret();
+      await getTokenAndSecret();
       throw new Error("Missing secret. Reconnecting.");
     }
 
     return CryptoJS.HmacSHA256(encryptedData, secret).toString();
   };
 
-  const decryptData = (encryptedData: string) => {
+  const decryptData = async (encryptedData: string) => {
     if (!secret || !id) {
-      getTokenAndSecret();
+      await getTokenAndSecret();
       throw new Error("Missing secret or id. Reconnecting.");
     }
 
@@ -81,10 +85,10 @@ function App() {
     }
 
     try {
-      const encryptedData = encryptData(data);
-      const hmac = generateHMAC(encryptedData);
+      const encryptedData = await encryptData(data);
+      const hmac = await generateHMAC(encryptedData);
 
-      await fetch(`${API_URL}/`, {
+      const response = await fetch(`${API_URL}/`, {
         method: "POST",
         body: JSON.stringify({ data: encryptedData, hmac }),
         headers: {
@@ -94,7 +98,24 @@ function App() {
         credentials: "include",
       });
 
-      showToast("Data saved successfully.");
+      const result = await response.json();
+
+      // Handle different error cases from the server
+      if (response.status === 400) {
+        if (result.message === "Bad Request.") {
+          showToast("Bad Request. Please reconnect.");
+        } else if (result.message === "Secret missing, please connect again.") {
+          showToast("Secret missing. Please reconnect.");
+          clearSecret(); // Clear the secret and id on client-side
+          await getTokenAndSecret(); // Attempt to reconnect and fetch the secret
+        } else if (result.message === "Data integrity compromised.") {
+          showToast("Data integrity compromised. Please try again.");
+        }
+      } else if (response.status === 200) {
+        showToast("Data saved successfully.");
+      } else {
+        showToast("Error: Unexpected response from the server.");
+      }
     } catch (error) {
       showToast("Error saving data.");
       console.error("Error saving data:", error);
@@ -106,16 +127,35 @@ function App() {
       const response = await fetch(`${API_URL}/`, {
         credentials: "include",
       });
-      const result = await response.json();
-      const { encryptedData, hmac } = result.data;
 
-      const calculatedHmac = generateHMAC(encryptedData);
-      if (calculatedHmac !== hmac) {
-        showToast("Data integrity compromised.");
+      if (!response.ok) {
+        const errorMessage = await response.json();
+        if(response.status===400){
+          if (errorMessage.message === "Bad Request.") {
+            showToast("Bad request: Please connect again.");
+            await getTokenAndSecret(); // Try reconnecting to get a new secret
+          } else if (errorMessage.message === "Secret missing, please connect again.") {
+            showToast("Secret is missing: Please connect again.");
+            await getTokenAndSecret(); // Reconnect to get the secret
+          } else if (errorMessage.message.includes("backup missing")) {
+            showToast("Data tampered and backup missing: Please connect and save data again.");
+            await clearSecret(); // Clear the data as it's compromised
+          }
+        }
         return;
       }
 
-      const decryptedData = decryptData(encryptedData);
+
+      const result = await response.json();
+      const { encryptedData, hmac } = result.data;
+
+      const calculatedHmac = await generateHMAC(encryptedData);
+      if (calculatedHmac !== hmac) {
+        showToast("Data integrity compromised in-transit.");
+        return;
+      }
+
+      const decryptedData = await decryptData(encryptedData);
       setData(decryptedData);
       showToast("Data retrieved and decrypted successfully.");
     } catch (error) {
@@ -124,9 +164,10 @@ function App() {
     }
   };
 
-  const clearSecret = () => {
+  const clearSecret = async() => {
     setId(null)
     setSecret(null)
+    await getTokenAndSecret()
   }
 
   return (
